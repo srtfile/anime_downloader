@@ -1,0 +1,181 @@
+name: Ultra M3U8 Downloader
+
+on:
+  workflow_dispatch:
+    inputs:
+      mal_id:
+        description: "MAL ID (leave blank to use tasks from input_data.txt)"
+        required: false
+        type: string
+        default: ""
+      episodes:
+        description: "Episodes (e.g. '250 to 255', '25', or 'all')"
+        required: false
+        type: string
+        default: ""
+      url:
+        description: "Direct M3U8 Stream URL (optional)"
+        required: false
+        type: string
+        default: ""
+      threads:
+        description: "Concurrent Download Threads"
+        required: false
+        type: choice
+        options:
+          - "16"
+          - "32"
+          - "48"
+          - "64"
+        default: "32"
+      quality:
+        description: "Stream Quality"
+        required: false
+        type: choice
+        options:
+          - "best"
+          - "worst"
+        default: "best"
+      upload_artifact:
+        description: "Upload videos to GitHub Actions Artifacts"
+        required: false
+        type: boolean
+        default: true
+      create_release:
+        description: "Upload videos to a GitHub Release (direct downloads)"
+        required: false
+        type: boolean
+        default: true
+      release_tag:
+        description: "Release Tag Name (if create_release is true)"
+        required: false
+        type: string
+        default: ""
+
+  push:
+    paths:
+      - 'input_data.txt'
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  download-and-export:
+    runs-on: ubuntu-latest
+    name: High-Speed M3U8 Download
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Optimize Network & System Limits
+        run: |
+          # Boost socket buffers and file descriptors for ultra-high concurrency
+          sudo sysctl -w net.core.rmem_max=16777216 || true
+          sudo sysctl -w net.core.wmem_max=16777216 || true
+          sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216" || true
+          sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216" || true
+          ulimit -n 65535 || true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Verify FFmpeg
+        run: |
+          ffmpeg -version | head -n 1
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Ultra Speed Download
+        id: run_downloader
+        env:
+          PYTHONUNBUFFERED: "1"
+          GITHUB_ACTIONS: "true"
+          CI: "true"
+        run: |
+          THREADS="${{ inputs.threads || '32' }}"
+          QUALITY="${{ inputs.quality || 'best' }}"
+          MAL_ID="${{ inputs.mal_id }}"
+          EPISODES="${{ inputs.episodes }}"
+          DIRECT_URL="${{ inputs.url }}"
+
+          echo "🚀 Starting Ultra Downloader with $THREADS concurrent threads..."
+
+          if [ -n "$DIRECT_URL" ]; then
+            echo "📥 Downloading Direct URL..."
+            python "m3u8 downloader.py" -u "$DIRECT_URL" -t "$THREADS" -q "$QUALITY" --ci
+          elif [ -n "$MAL_ID" ]; then
+            EP_ARGS=""
+            if [ -n "$EPISODES" ]; then
+              EP_ARGS="--ep \"$EPISODES\""
+            else
+              EP_ARGS="--ep all"
+            fi
+            echo "📥 Downloading MAL ID $MAL_ID (Episodes: ${EPISODES:-all})..."
+            eval python \"m3u8 downloader.py\" --mal \"$MAL_ID\" $EP_ARGS -t \"$THREADS\" -q \"$QUALITY\" --ci
+          else
+            echo "📥 Running tasks from input_data.txt..."
+            python "m3u8 downloader.py" --file "input_data.txt" -t "$THREADS" -q "$QUALITY" --ci
+          fi
+
+      - name: Inspect Downloaded Files
+        id: check_files
+        run: |
+          mkdir -p output_videos
+          # Move all downloaded mp4 or ts files into output folder
+          find . -maxdepth 1 -type f \( -name "*.mp4" -o -name "*.ts" \) -exec mv {} output_videos/ \;
+
+          COUNT=$(find output_videos -type f | wc -l)
+          echo "Found $COUNT video file(s)."
+          echo "file_count=$COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "### 📦 Downloaded Videos Summary" >> $GITHUB_STEP_SUMMARY
+            echo "| Filename | Size |" >> $GITHUB_STEP_SUMMARY
+            echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+            ls -lh output_videos | awk 'NR>1 {print "| `" $9 "` | " $5 " |"}' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No video files were generated." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Artifacts (Actions Storage)
+        if: ${{ (inputs.upload_artifact != false) && steps.check_files.outputs.file_count > 0 }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: downloaded-videos-${{ github.run_number }}
+          path: output_videos/*
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Create GitHub Release with Videos
+        if: ${{ (inputs.create_release != false) && steps.check_files.outputs.file_count > 0 }}
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || format('download-run-{0}', github.run_number) }}
+          name: ${{ inputs.release_tag != '' && inputs.release_tag || format('Downloaded Anime Episodes (Run #{0})', github.run_number) }}
+          body: |
+            ## 🎬 Download Completed Successfully!
+            - **Run ID:** `${{ github.run_id }}`
+            - **Date:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            - **Total Videos:** ${{ steps.check_files.outputs.file_count }}
+
+            Direct download links for all episode videos are attached below.
+          files: output_videos/*
+          draft: false
+          prerelease: false
