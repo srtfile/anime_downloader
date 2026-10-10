@@ -1,0 +1,25 @@
+# ==============================================================================
+#                      M3U8 ULTRA DOWNLOADER - INPUT DATA FILE
+# ==============================================================================
+# In this file, you can set your anime download tasks (one task per line).
+# Lines starting with '#' are comments and will be ignored.
+#
+# Supported Formats:
+# ------------------------------------------------------------------------------
+# 1. Download a range of episodes (e.g. 1 to 35):
+#    mal id = 1735 ep = 1 to 35
+#
+# 2. Download a single episode (e.g. only episode 25):
+#    mal id = 1735 ep = 25
+#
+# 3. Download ALL available episodes for that anime:
+#    mal id = 1735 all
+#
+# ------------------------------------------------------------------------------
+# Active Download Tasks:
+# (Uncomment or edit the lines below as needed)
+# ==============================================================================
+
+mal id = 1735 ep = 250 to 255
+# mal id = 1735 ep = 25
+# mal id = 1735 all
